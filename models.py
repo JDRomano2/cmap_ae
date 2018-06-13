@@ -6,6 +6,7 @@ import numpy as np
 import h5py
 import math
 import time
+import ipdb
 from tqdm import tqdm
 from torch import nn
 from torch.autograd import Variable, Function
@@ -15,7 +16,7 @@ from torch.optim.lr_scheduler import StepLR
 # from torchviz import make_dot
 from tensorboard_logger import configure, log_value
 
-from .data import CmapDataset, parser
+from data import CmapDataset
 
 __all__ = ["Autoencoder", "DenoisingAE", "VariationalAE"]
 
@@ -24,19 +25,20 @@ __email__ = "jdr2160@cumc.columbia.edu"
 
 
 VAE = False
-AE = True
+AE = False
 
 
 parser = argparse.ArgumentParser(description='Generate a new dataset from CMap data.')
 parser.add_argument(
     '-m',
     '--model',
-    help='Autoencoder model to use'
+    help='Autoencoder variation to use',
     choices=[
         'ae',
         'vae',
         'da',
         'sda',
+        'none'
     ],
     required=True
 )
@@ -49,7 +51,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '-t',
-    '--pert-types',
+    '--pert_types',
     nargs='?',
     help='Perturbagen types to select',
     choices=[
@@ -309,12 +311,21 @@ if __name__=="__main__":
 
     fname_token = time.time()
 
+    args = parser.parse_args()
+
     cmap_dset = CmapDataset(
         gctx_file = "annotated_GSE92742_Broad_LINCS_Level5_COMPZ_n473647x12328.gctx",
         root_dir = "../../Data/l1000/",
     )
 
-    cmap_dset.filter_pert_type(['trt_lig'])
+    #cmap_dset.filter_pert_type(['trt_cp'])
+    cmap_dset.filter_pert_iname(['imatinib'])
+    cmap_dset.filter_cell_type()
+
+    perts = cmap_dset.extract_annotation('pert_iname')
+    cells = cmap_dset.extract_annotation('cell_id')
+
+    ipdb.set_trace()
 
     if VAE:
         configure("runs/vae/{0}".format(fname_token), flush_secs=5)
