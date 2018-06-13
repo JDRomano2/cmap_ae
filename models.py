@@ -4,19 +4,18 @@ import torch
 import pandas as pd
 import numpy as np
 import h5py
-import ipdb
 import math
+import time
 from tqdm import tqdm
 from torch import nn
-from torch.autograd import Variable
+from torch.autograd import Variable, Function
 from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import StepLR
 
 # from torchviz import make_dot
 from tensorboard_logger import configure, log_value
 
-configure("runs/run-1235", flush_secs=5)
-
-from data import CmapDataset
+from .data import CmapDataset, parser
 
 __all__ = ["Autoencoder", "DenoisingAE", "VariationalAE"]
 
@@ -24,26 +23,85 @@ __author__ = "Joseph D. Romano"
 __email__ = "jdr2160@cumc.columbia.edu"
 
 
+VAE = False
+AE = True
+
+
+parser = argparse.ArgumentParser(description='Generate a new dataset from CMap data.')
+parser.add_argument(
+    '-m',
+    '--model',
+    help='Autoencoder model to use'
+    choices=[
+        'ae',
+        'vae',
+        'da',
+        'sda',
+    ],
+    required=True
+)
+parser.add_argument(
+    '-p',
+    '--pert_names',
+    nargs='+',
+    help='Perturbagen names to subset from the dataset',
+    required=False
+)
+parser.add_argument(
+    '-t',
+    '--pert-types',
+    nargs='?',
+    help='Perturbagen types to select',
+    choices=[
+        'trt_cp',           # Compound
+        'trt_lig',          # Peptides and biological agents (e.g., cytokines)
+        'trt_oe',           # cDNA for overexpression of wt gene
+        'trt_oe.mut',       # cDNA for overexpression of mutated gene
+        'trt_sh',           # shRNA for LoF of gene
+        'trt_sh.cgs',       # Consensus sig for shRNAs targeting the same gene
+        'trt_sh.css',       # Controls - consensus sig from shRNAs that share common seed sequence
+        'ctl_vehicle',      # Controls - vehicle for compound treatment (e.g., DMSO)
+        'ctl_vehicle.cns',  # Controls - consensus signature of vehicles
+        'ctl_vector',       # Controls - vector for genetic perturbation (e.g., empty vector, GFP)
+        'ctl_vector.cns',   # Controls - consensus signature of vectors
+        'ctl_untrt',        # Controls - untreated cells
+        'ctl_untrt.cns'     # Controls - consensus signature of many untreated wells
+    ],
+    required=False
+)
+
+
+class L1Penalty(Function):
+
+    @staticmethod
+    def forward(ctx, inpt, l1weight):
+        ctx.save_for_backward(input)
+        ctx.l1weight = l1weight
+        return inpt
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_variables
+        grad_input = input.clone().sign().mul(self.l1weight)
+        grad_input += grad_output
+        return grad_input
+
+
 class Autoencoder(nn.Module):
-    def __init__(self):
+    def __init__(self, config_dict):
         super(Autoencoder, self).__init__()
 
+        self.arch = config_dict
+
         self.encoder = nn.Sequential(
-            nn.Linear(INPUT, HIDDEN_1),
+            nn.Linear(self.arch['input_dim'], self.arch['hidden_1']),
             nn.Tanh(),
-            #nn.Linear(HIDDEN_1, HIDDEN_2),
-            #nn.Tanh(),
-            #nn.Linear(HIDDEN_2, HIDDEN_3)
         )
         self.decoder = nn.Sequential(
-            #nn.Linear(HIDDEN_3, HIDDEN_2),
-            #nn.Tanh(),
-            #nn.Linear(HIDDEN_2, HIDDEN_1),
-            #nn.Tanh(),
-            nn.Linear(HIDDEN_1, INPUT),
+            nn.Linear(self.arch['hidden_1'], self.arch['input_dim']),
             nn.Tanh()
         )
-        self.lr = LEARNING_RATE_START
+        self.lr = self.arch['lr_start']
         self.init_weights()
 
     def forward(self, x):
@@ -59,9 +117,10 @@ class Autoencoder(nn.Module):
     def reduce_lr(self, mult_factor=0.1):
         self.lr *= mult_factor
 
-    def compute_loss(self, output):
-        # todo
-        return
+
+# class RegularizedAE(Autoencoder):
+#     def __init__(self):
+#         super(RegularizedAE, self).__init__()
 
 
 class DenoisingAE(Autoencoder):
@@ -248,61 +307,115 @@ class VariationalAE(nn.Module):
 if __name__=="__main__":
     # testing zone
 
+    fname_token = time.time()
+
     cmap_dset = CmapDataset(
-        gctx_file = "GSE70138_Broad_LINCS_Level5_COMPZ_n118050x12328_2017-03-06.gctx",
+        gctx_file = "annotated_GSE92742_Broad_LINCS_Level5_COMPZ_n473647x12328.gctx",
         root_dir = "../../Data/l1000/",
     )
 
-    net_config = dict(
-        input_dim = cmap_dset.cmap_data.shape[1],
-        # input_dim = 1000,
-        recog_1 = 8000,
-        recog_2 = 4000,
-        len_z = 1000,
-        gen_1 = 4000,
-        gen_2 = 8000,
-        lr_start = 0.0001,
-        batch_size = 32,
-        n_epochs = 50,
-    )
+    cmap_dset.filter_pert_type(['trt_lig'])
 
-    dataloader = DataLoader(
-        cmap_dset,
-        batch_size=net_config['batch_size'],
-        shuffle=True,
-    )
+    if VAE:
+        configure("runs/vae/{0}".format(fname_token), flush_secs=5)
 
-    vae = VariationalAE(net_config).cuda()
+        net_config = dict(
+            input_dim = cmap_dset.cmap_data.shape[1],
+            # input_dim = 1000,
+            recog_1 = 8000,
+            recog_2 = 4000,
+            len_z = 1000,
+            gen_1 = 4000,
+            gen_2 = 8000,
+            lr_start = 0.0001,
+            batch_size = 32,
+            n_epochs = 50,
+        )
 
-    optimizer = torch.optim.Adam(vae.parameters(), lr=net_config['lr_start'])
+        dataloader = DataLoader(
+            cmap_dset,
+            batch_size=net_config['batch_size'],
+            shuffle=True,
+        )
 
-    # make_dot(vae, params=dict(vae.parameters()))
+        vae = VariationalAE(net_config).cuda()
 
-    # x_test = next(iter(dataloader))
-    # x_test = Variable(x_test).cuda()
-    # output_test = vae(x_test)
+        optimizer = torch.optim.Adam(vae.parameters(), lr=net_config['lr_start'])
 
-    for epoch in range(net_config['n_epochs']):
-        for i, data in enumerate(dataloader):
-            step = (epoch*len(dataloader)) + i
-            inputs = data
-            inputs = Variable(inputs).cuda()
-            optimizer.zero_grad()
-            dec = vae(inputs)
-            ll = vae.latent_loss(inputs)
-            gl = vae.gen_loss(inputs)
-            loss = ll + gl
-            loss.backward()
-            optimizer.step()
-            l = loss.data[0]
-            log_value('latent_loss', ll, step)
-            log_value('generative_loss', gl, step)
-            log_value('loss', l, step)
-            if math.isnan(l):
-                exit
+        # make_dot(vae, params=dict(vae.parameters()))
 
-            if i % 10 == 0:
-                print("  {0}/{1}     (loss: {2})".format(i, len(dataloader), l))
-                print("    latent loss:     {0}".format(ll))
-                print("    generative loss: {0}".format(gl))
-        print("Epoch: ", epoch, ". Loss: ", l)
+        # x_test = next(iter(dataloader))
+        # x_test = Variable(x_test).cuda()
+        # output_test = vae(x_test)
+
+        for epoch in range(net_config['n_epochs']):
+            for i, data in enumerate(dataloader):
+                step = (epoch*len(dataloader)) + i
+                inputs = data
+                inputs = Variable(inputs).cuda()
+                optimizer.zero_grad()
+                dec = vae(inputs)
+                ll = vae.latent_loss(inputs)
+                gl = vae.gen_loss(inputs)
+                loss = ll + gl
+                loss.backward()
+                optimizer.step()
+                l = loss.data[0]
+                log_value('latent_loss', ll, step)
+                log_value('generative_loss', gl, step)
+                log_value('loss', l, step)
+                if math.isnan(l):
+                    exit
+
+                if i % 10 == 0:
+                    print("  {0}/{1}     (loss: {2})".format(i, len(dataloader), l))
+                    print("    latent loss:     {0}".format(ll))
+                    print("    generative loss: {0}".format(gl))
+            print("Epoch: ", epoch, ". Loss: ", l)
+
+    if AE:
+        configure("runs/ae/{0}".format(fname_token), flush_secs=5)
+        state_path = "runs/ae/state-{0}".format(fname_token)
+
+        net_config = dict(
+            input_dim = cmap_dset.cmap_data.shape[1],
+            hidden_1 = 8000,
+            lr_start = 0.0001,
+            batch_size = 32,
+            n_epochs = 50
+        )
+
+        dataloader = DataLoader(
+            cmap_dset,
+            batch_size=net_config['batch_size'],
+            shuffle=True,
+        )
+
+        ae = Autoencoder(net_config).cuda()
+        optimizer = torch.optim.Adam(ae.parameters(), lr=net_config['lr_start'])
+        scheduler = StepLR(optimizer, step_size=3, gamma=0.5)
+        loss_func = nn.MSELoss()
+
+        for epoch in range(net_config['n_epochs']):
+            scheduler.step()
+            for i, data in enumerate(dataloader):
+                step = (epoch*len(dataloader)) + i
+                inputs = data
+                inputs = Variable(inputs).cuda()
+                # FORWARD
+                outputs = ae(inputs)
+                loss = loss_func(outputs, inputs)
+                # BACKWARD
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                log_value('loss', loss, step)
+
+                if i % 10 == 0:
+                    print("  batch:{}/{}, loss:{:.4f}".format(i, len(dataloader), loss.data.item()))
+            print("epoch:{}/{}".format(epoch+1, net_config['n_epochs']))
+            print("Current learning rate: {0}".format(scheduler.get_lr()))
+            print("Saving model parameter checkpoint...")
+            torch.save(ae.state_dict(), state_path)
+            print("...done.")
