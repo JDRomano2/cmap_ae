@@ -313,17 +313,21 @@ if __name__=="__main__":
 
     args = parser.parse_args()
 
-    cmap_dset = CmapDataset(
+    cmap = CmapDataset(
         gctx_file = "annotated_GSE92742_Broad_LINCS_Level5_COMPZ_n473647x12328.gctx",
-        root_dir = "../../Data/l1000/",
+        #root_dir = "../../Data/l1000/",
+        #gctx_file = "testdata_n1000x978.gctx",
+        root_dir = "../../Data/cmap/",
     )
 
-    #cmap_dset.filter_pert_type(['trt_cp'])
-    cmap_dset.filter_pert_iname(['imatinib'])
-    cmap_dset.filter_cell_type()
+    #cmap.filter_pert_type(['trt_cp'])
+    cmap.filter_pert_iname(['imatinib'])
+    cmap.filter_cell_type()
 
-    perts = cmap_dset.extract_annotation('pert_iname')
-    cells = cmap_dset.extract_annotation('cell_id')
+    perts = cmap.extract_annotation('pert_iname')
+    cells = cmap.extract_annotation('cell_id')
+
+    cmap.toggle_filter_lmark()
 
     ipdb.set_trace()
 
