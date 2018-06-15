@@ -313,6 +313,8 @@ if __name__=="__main__":
 
     args = parser.parse_args()
 
+    args
+
     cmap = CmapDataset(
         gctx_file = "annotated_GSE92742_Broad_LINCS_Level5_COMPZ_n473647x12328.gctx",
         #root_dir = "../../Data/l1000/",
@@ -329,13 +331,11 @@ if __name__=="__main__":
 
     cmap.toggle_filter_lmark()
 
-    ipdb.set_trace()
-
-    if VAE:
+    if args.model == 'vae':
         configure("runs/vae/{0}".format(fname_token), flush_secs=5)
 
         net_config = dict(
-            input_dim = cmap_dset.cmap_data.shape[1],
+            input_dim = cmap.cmap_data.shape[1],
             # input_dim = 1000,
             recog_1 = 8000,
             recog_2 = 4000,
@@ -348,7 +348,7 @@ if __name__=="__main__":
         )
 
         dataloader = DataLoader(
-            cmap_dset,
+            cmap,
             batch_size=net_config['batch_size'],
             shuffle=True,
         )
@@ -388,20 +388,30 @@ if __name__=="__main__":
                     print("    generative loss: {0}".format(gl))
             print("Epoch: ", epoch, ". Loss: ", l)
 
-    if AE:
+    if args.model == 'ae':
         configure("runs/ae/{0}".format(fname_token), flush_secs=5)
         state_path = "runs/ae/state-{0}".format(fname_token)
+        print("input dim: ", len(cmap[0]))
 
+        # net_config = dict(
+        #     input_dim = cmap.data.shape[1],
+        #     hidden_1 = 8000,
+        #     lr_start = 0.0001,
+        #     batch_size = 32,
+        #     n_epochs = 50
+        # )
         net_config = dict(
-            input_dim = cmap_dset.cmap_data.shape[1],
-            hidden_1 = 8000,
+            input_dim = len(cmap[0]),
+            hidden_1 = len(cmap[0]),
             lr_start = 0.0001,
             batch_size = 32,
             n_epochs = 50
         )
 
+        ipdb.set_trace()
+
         dataloader = DataLoader(
-            cmap_dset,
+            cmap,
             batch_size=net_config['batch_size'],
             shuffle=True,
         )

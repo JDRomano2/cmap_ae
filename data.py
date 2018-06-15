@@ -176,7 +176,12 @@ class CmapDataset(Dataset):
         if self.filter_lmark is False:
             self.lmark_range = None
         else:
+            assert self.filter_lmark is True
             self.test_contiguous_lmark()
+        if self.verbose:
+            print("Filtering landmark genes: {0}".format(
+                "on" if (self.filter_lmark is True) else "off"
+            ))
 
     def cond_lmark(self, idx):
         if self.lmark_range is None:
